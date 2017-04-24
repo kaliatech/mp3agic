@@ -55,7 +55,12 @@ public class Mp3File extends FileWrapper {
 
 	public Mp3File(String filename, int bufferLength, boolean scanFile) throws IOException, UnsupportedTagException, InvalidDataException {
 		super(filename);
-		init(bufferLength, scanFile);
+		init(bufferLength, scanFile, false);
+	}
+
+	public Mp3File(String filename, int bufferLength, boolean scanFile, boolean skipBadFrames) throws IOException, UnsupportedTagException, InvalidDataException {
+		super(filename);
+		init(bufferLength, scanFile, skipBadFrames);
 	}
 
 	public Mp3File(File file) throws IOException, UnsupportedTagException, InvalidDataException {
@@ -67,8 +72,12 @@ public class Mp3File extends FileWrapper {
 	}
 
 	public Mp3File(File file, int bufferLength, boolean scanFile) throws IOException, UnsupportedTagException, InvalidDataException {
+		this(file, bufferLength, scanFile, false);
+	}
+
+	public Mp3File(File file, int bufferLength, boolean scanFile, boolean skipBadFrames) throws IOException, UnsupportedTagException, InvalidDataException {
 		super(file);
-		init(bufferLength, scanFile);
+		init(bufferLength, scanFile, skipBadFrames);
 	}
 
 	public Mp3File(Path path) throws IOException, UnsupportedTagException, InvalidDataException {
@@ -80,11 +89,15 @@ public class Mp3File extends FileWrapper {
 	}
 
 	public Mp3File(Path path, int bufferLength, boolean scanFile) throws IOException, UnsupportedTagException, InvalidDataException {
-		super(path);
-		init(bufferLength, scanFile);
+		this(path, bufferLength, true, false);
 	}
 
-	private void init(int bufferLength, boolean scanFile) throws IOException, UnsupportedTagException, InvalidDataException {
+	public Mp3File(Path path, int bufferLength, boolean scanFile, boolean skipBadFrames) throws IOException, UnsupportedTagException, InvalidDataException {
+		super(path);
+		init(bufferLength, scanFile, skipBadFrames);
+	}
+
+	private void init(int bufferLength, boolean scanFile, boolean skipBadFrames) throws IOException, UnsupportedTagException, InvalidDataException {
 		if (bufferLength < MINIMUM_BUFFER_LENGTH + 1) throw new IllegalArgumentException("Buffer too small");
 
 		this.bufferLength = bufferLength;
@@ -92,7 +105,7 @@ public class Mp3File extends FileWrapper {
 
 		try (SeekableByteChannel seekableByteChannel = Files.newByteChannel(path, StandardOpenOption.READ)) {
 			initId3v1Tag(seekableByteChannel);
-			scanFile(seekableByteChannel);
+			scanFile(seekableByteChannel, skipBadFrames);
 			if (startOffset < 0) {
 				throw new InvalidDataException("No mpegs frames found");
 			}
@@ -124,7 +137,7 @@ public class Mp3File extends FileWrapper {
 		return 0;
 	}
 
-	private void scanFile(SeekableByteChannel seekableByteChannel) throws IOException, InvalidDataException {
+	private void scanFile(SeekableByteChannel seekableByteChannel, boolean skipBadFrames) throws IOException, InvalidDataException {
 		ByteBuffer byteBuffer = ByteBuffer.allocate(bufferLength);
 		int fileOffset = preScanFile(seekableByteChannel);
 		seekableByteChannel.position(fileOffset);
@@ -146,7 +159,7 @@ public class Mp3File extends FileWrapper {
 							}
 							lastOffset = startOffset;
 						}
-						offset = scanBlock(bytes, bytesRead, fileOffset, offset);
+						offset = scanBlock(bytes, bytesRead, fileOffset, offset, skipBadFrames);
 						fileOffset += offset;
 						seekableByteChannel.position(fileOffset);
 						break;
@@ -163,7 +176,13 @@ public class Mp3File extends FileWrapper {
 							seekableByteChannel.position(fileOffset);
 							break;
 						}
-						return;
+						// This conditional is counter-intuitive. If we are skipping bad frames and we end up here,
+						// then something serious has happened. If we are not skipping bad frames, then to keep
+						// the original library handling, we stop processing upon encountering the first bad frame.
+						if (skipBadFrames)
+							throw e;
+						else
+							return;
 					}
 				}
 			}
@@ -204,10 +223,21 @@ public class Mp3File extends FileWrapper {
 		return offset;
 	}
 
-	private int scanBlock(byte[] bytes, int bytesRead, int absoluteOffset, int offset) throws InvalidDataException {
+	private int scanBlock(byte[] bytes, int bytesRead, int absoluteOffset, int offset, boolean skipBadFrames) throws InvalidDataException {
 		while (offset < bytesRead - MINIMUM_BUFFER_LENGTH) {
-			MpegFrame frame = new MpegFrame(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
-			sanityCheckFrame(frame, absoluteOffset + offset);
+			MpegFrame frame;
+			try {
+				frame = new MpegFrame(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+				sanityCheckFrame(frame, absoluteOffset + offset);
+			}
+			catch(InvalidDataException ide) {
+				if (skipBadFrames) {
+					offset++;
+					continue;
+				}
+				throw ide;
+			}
+
 			int newEndOffset = absoluteOffset + offset + frame.getLengthInBytes() - 1;
 			if (newEndOffset < maxEndOffset()) {
 				endOffset = absoluteOffset + offset + frame.getLengthInBytes() - 1;

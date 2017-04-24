@@ -22,6 +22,7 @@ public class Mp3FileTest {
 	private static final String MP3_WITH_ID3V23_UNICODE_TAGS = "src" + fs + "test" + fs + "resources" + fs + "v23unicodetags.mp3";
 	private static final String NOT_AN_MP3 = "src" + fs + "test" + fs + "resources" + fs + "notanmp3.mp3";
 	private static final String MP3_WITH_INCOMPLETE_MPEG_FRAME = "src" + fs + "test" + fs + "resources" + fs + "incompletempegframe.mp3";
+	private static final String MP3_WITH_CORRUPTED_FRAMES = "src" + fs + "test" + fs + "resources" + fs + "missing-sync-frame.mp3";
 
 	@Test
 	public void shouldLoadMp3WithNoTags() throws IOException, UnsupportedTagException, InvalidDataException {
@@ -185,6 +186,18 @@ public class Mp3FileTest {
 		assertTrue(mp3File.hasId3v1Tag());
 		assertTrue(mp3File.hasId3v2Tag());
 		assertEquals(5, mp3File.getFrameCount());
+	}
+
+	@Test
+	public void shouldHavingWrongDurationIfNotSkippingBadFrames() throws Exception {
+		Mp3File mp3File = new Mp3File(new File(MP3_WITH_CORRUPTED_FRAMES), 256, true, false);
+		assertEquals("Duration matches original library handling", 1306, mp3File.getLengthInMilliseconds());
+	}
+
+	@Test
+	public void shouldHavingCorrectDurationIfSkippingBadFrames() throws Exception {
+		Mp3File mp3File = new Mp3File(new File(MP3_WITH_CORRUPTED_FRAMES), 256, true, true);
+		assertEquals("Duration correct even with bad frames", 299938, mp3File.getLengthInMilliseconds());
 	}
 
 	@Test
